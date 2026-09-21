@@ -21,8 +21,7 @@ st.set_page_config(
 st.title("🌍 전세계 고령화 지도")
 
 st.caption(
-    "65세 이상 인구가 전체 인구에서 차지하는 비율을 "
-    "국가별로 비교합니다."
+    "국가를 클릭하면 해당 국가의 연예인 정보를 확인할 수 있습니다."
 )
 
 
@@ -30,43 +29,34 @@ st.caption(
 # 2. 데이터 주소
 # =========================================================
 
-# 한국 읍·면·동 인구 데이터
 KOREA_POPULATION_URL = (
     "https://raw.githubusercontent.com/greatsong/modudata/"
     "main/data/population_yearly.csv.gz"
 )
 
-# 한국 시군구 경계 데이터
 KOREA_GEOJSON_URL = (
     "https://raw.githubusercontent.com/greatsong/modudata/"
     "main/data/boundaries/sigungu_kr.geojson"
 )
 
-# World Bank
-# Population ages 65 and above (% of total population)
 WORLD_BANK_URL = (
     "https://api.worldbank.org/v2/country/all/"
     "indicator/SP.POP.65UP.TO.ZS"
     "?format=json&per_page=20000"
 )
 
+# Wikimedia / Wikidata
+WIKIDATA_SPARQL_URL = (
+    "https://query.wikidata.org/sparql"
+)
+
 
 # =========================================================
-# 3. 전세계 인구 데이터 불러오기
+# 3. 전세계 고령화 데이터
 # =========================================================
 
 @st.cache_data
 def load_world_data():
-    """
-    World Bank에서 국가별 65세 이상 인구 비율을 가져온다.
-
-    기존 코드에서는 국가 이름을 가져오기 위해
-    World Bank 국가 API를 한 번 더 호출했는데,
-    그 과정에서 iso3Code 열 이름 때문에 오류가 발생할 수 있다.
-
-    그래서 이번에는 처음 받은 데이터 안에 있는
-    country.name과 countryiso3code를 바로 사용한다.
-    """
 
     response = requests.get(
         WORLD_BANK_URL,
@@ -77,11 +67,9 @@ def load_world_data():
 
     data = response.json()
 
-    # World Bank API의 첫 번째 항목은 페이지 정보이고,
-    # 실제 데이터는 두 번째 항목이다.
     if len(data) < 2:
         raise ValueError(
-            "World Bank에서 인구 데이터를 받지 못했습니다."
+            "World Bank에서 데이터를 받지 못했습니다."
         )
 
     rows = data[1]
@@ -90,12 +78,10 @@ def load_world_data():
 
     for row in rows:
 
-        # ISO3 국가 코드
         iso3 = row.get(
             "countryiso3code"
         )
 
-        # 국가 이름
         country_info = row.get(
             "country",
             {}
@@ -106,17 +92,14 @@ def load_world_data():
             ""
         )
 
-        # 연도
         year = row.get(
             "date"
         )
 
-        # 65세 이상 인구 비율
         value = row.get(
             "value"
         )
 
-        # 필요한 값이 없는 행은 제외
         if not iso3:
             continue
 
@@ -128,7 +111,7 @@ def load_world_data():
 
         result.append(
             {
-                "ISO3": str(iso3).strip(),
+                "ISO3": str(iso3).strip().upper(),
                 "국가": country_name,
                 "연도": int(year),
                 "고령화율": float(value)
@@ -142,33 +125,12 @@ def load_world_data():
             "세계 인구 데이터를 만들지 못했습니다."
         )
 
-    # -----------------------------------------------------
-    # World Bank에는 국가뿐 아니라
-    # 지역/소득그룹 등의 집계자료도 포함될 수 있다.
-    #
-    # 실제 국가 지도를 그리기 위해
-    # ISO3 코드가 존재하는 자료만 사용한다.
-    # -----------------------------------------------------
-
-    world["ISO3"] = (
-        world["ISO3"]
-        .astype(str)
-        .str.upper()
-        .str.strip()
-    )
-
+    # ISO3 코드가 있는 자료만 사용
     world = world[
         world["ISO3"].str.len() == 3
     ].copy()
 
-    # -----------------------------------------------------
-    # 각 국가에서 가장 최신 연도의 자료를 선택한다.
-    #
-    # 국가마다 최신 자료가 서로 다를 수 있으므로
-    # 전체에서 단 하나의 연도를 선택하지 않고
-    # 국가별 최신 연도를 사용한다.
-    # -----------------------------------------------------
-
+    # 국가별로 가장 최신 자료 사용
     world = (
         world
         .sort_values(
@@ -182,13 +144,11 @@ def load_world_data():
         .copy()
     )
 
-    # 표시용 소수점
     world["고령화율"] = (
         world["고령화율"]
         .round(2)
     )
 
-    # 화면에 표시할 최신 연도
     latest_year = int(
         world["연도"].max()
     )
@@ -197,14 +157,11 @@ def load_world_data():
 
 
 # =========================================================
-# 4. 한국 인구 데이터 불러오기
+# 4. 한국 인구 데이터
 # =========================================================
 
 @st.cache_data
 def load_korea_population():
-    """
-    한국 읍·면·동 인구 데이터를 불러온다.
-    """
 
     response = requests.get(
         KOREA_POPULATION_URL,
@@ -213,13 +170,11 @@ def load_korea_population():
 
     response.raise_for_status()
 
-    # gzip 압축 해제
     data = gzip.decompress(
         response.content
     )
 
-    # '코드'는 계산하는 숫자가 아니라
-    # 행정구역을 구분하는 코드이므로 문자열로 읽는다.
+    # 행정구역 코드는 문자열로 읽는다.
     df = pd.read_csv(
         io.BytesIO(data),
         dtype={"코드": str}
@@ -229,7 +184,7 @@ def load_korea_population():
 
 
 # =========================================================
-# 5. 한국 GeoJSON 불러오기
+# 5. 한국 GeoJSON
 # =========================================================
 
 @st.cache_data
@@ -254,26 +209,23 @@ def make_korea_data(df):
 
     df = df.copy()
 
-    # 행정동 코드는 반드시 문자열
     df["코드"] = (
         df["코드"]
         .astype(str)
         .str.strip()
     )
 
-    # 코드 앞 5자리가 시군구 코드
+    # 행정동 코드 앞 5자리 = 시군구 코드
     df["시군구코드"] = (
         df["코드"]
         .str[:5]
     )
 
-    # 연도 숫자 변환
     df["연도"] = pd.to_numeric(
         df["연도"],
         errors="coerce"
     )
 
-    # 가장 최신 연도 선택
     latest_year = int(
         df["연도"].max()
     )
@@ -282,24 +234,14 @@ def make_korea_data(df):
         df["연도"] == latest_year
     ].copy()
 
-    # -----------------------------------------------------
-    # 전체 연령의 '계_' 열 찾기
-    # 예:
-    # 계_0세
-    # 계_1세
-    # ...
-    # 계_65세
-    # ...
-    # 계_100세 이상
-    # -----------------------------------------------------
-
+    # 모든 연령별 전체 인구 열
     age_columns = [
         col
         for col in latest.columns
         if col.startswith("계_")
     ]
 
-    # 65세 이상 열 찾기
+    # 65세 이상 열
     elderly_columns = []
 
     for col in age_columns:
@@ -326,13 +268,9 @@ def make_korea_data(df):
                 )
 
                 if age >= 65:
-                    elderly_columns.append(
-                        col
-                    )
+                    elderly_columns.append(col)
 
             except ValueError:
-
-                # 숫자로 해석할 수 없는 열은 무시
                 pass
 
     if not elderly_columns:
@@ -340,7 +278,7 @@ def make_korea_data(df):
             "65세 이상 인구 열을 찾지 못했습니다."
         )
 
-    # 숫자형으로 변환
+    # 숫자로 변환
     for col in age_columns:
 
         latest[col] = pd.to_numeric(
@@ -348,22 +286,17 @@ def make_korea_data(df):
             errors="coerce"
         ).fillna(0)
 
-    # 전체 인구
     latest["전체인구"] = (
         latest[age_columns]
         .sum(axis=1)
     )
 
-    # 65세 이상 인구
     latest["65세이상인구"] = (
         latest[elderly_columns]
         .sum(axis=1)
     )
 
-    # -----------------------------------------------------
-    # 읍·면·동 → 시군구로 합산
-    # -----------------------------------------------------
-
+    # 시군구별 합계
     sigungu = (
         latest
         .groupby(
@@ -384,12 +317,10 @@ def make_korea_data(df):
         )
     )
 
-    # 인구가 0인 지역 제외
     sigungu = sigungu[
         sigungu["전체인구"] > 0
     ].copy()
 
-    # 고령화율 계산
     sigungu["고령화율"] = (
         sigungu["65세이상인구"]
         / sigungu["전체인구"]
@@ -445,29 +376,24 @@ def get_korea_geo_info(geojson):
 
 
 # =========================================================
-# 8. 세계 지도 5단계 분류
+# 8. 세계 지도 구간
 # =========================================================
 
 def classify_world_rate(rate):
 
     if rate < 7:
-
         return "7% 미만"
 
     elif rate < 14:
-
         return "7% 이상 ~ 14% 미만"
 
     elif rate < 21:
-
         return "14% 이상 ~ 21% 미만"
 
     elif rate < 28:
-
         return "21% 이상 ~ 28% 미만"
 
     else:
-
         return "28% 이상"
 
 
@@ -494,11 +420,10 @@ def make_world_map(world):
         "28% 이상"
     ]
 
-    # 낮은 비율 → 옅은 색
-    # 높은 비율 → 진한 색
     colors = {
 
-        "7% 미만": "#FFF7BC",
+        "7% 미만":
+            "#FFF7BC",
 
         "7% 이상 ~ 14% 미만":
             "#FEC44F",
@@ -515,8 +440,6 @@ def make_world_map(world):
 
     fig = go.Figure()
 
-    # 구간별로 하나의 레이어를 만든다.
-    # 이렇게 하면 범례에도 5개 구간이 나타난다.
     for category in categories:
 
         selected = world[
@@ -526,8 +449,11 @@ def make_world_map(world):
         if selected.empty:
             continue
 
+        # 국가코드를 customdata에도 넣는다.
+        # 클릭했을 때 어떤 국가인지 알아내기 위해 사용한다.
         customdata = selected[
             [
+                "ISO3",
                 "국가",
                 "고령화율",
                 "연도"
@@ -537,12 +463,10 @@ def make_world_map(world):
         fig.add_trace(
             go.Choropleth(
 
-                # 국가 ISO3 코드 사용
                 locations=selected["ISO3"],
 
                 locationmode="ISO-3",
 
-                # 같은 구간은 같은 색
                 z=[1] * len(selected),
 
                 colorscale=[
@@ -564,20 +488,15 @@ def make_world_map(world):
                 customdata=customdata,
 
                 hovertemplate=(
-                    "<b>%{customdata[0]}</b><br>"
+                    "<b>%{customdata[1]}</b><br>"
                     "65세 이상 인구 비율: "
-                    "%{customdata[1]:.2f}%<br>"
+                    "%{customdata[2]:.2f}%<br>"
                     "자료 연도: "
-                    "%{customdata[2]}"
+                    "%{customdata[3]}"
                     "<extra></extra>"
                 )
             )
         )
-
-    # -----------------------------------------------------
-    # 배경 지도 타일은 사용하지 않는다.
-    # 국가 경계만 표시한다.
-    # -----------------------------------------------------
 
     fig.update_geos(
 
@@ -626,7 +545,200 @@ def make_world_map(world):
 
 
 # =========================================================
-# 10. 한국 지도 만들기
+# 10. 클릭한 국가의 연예인 가져오기
+# =========================================================
+
+@st.cache_data(ttl=3600)
+def get_celebrities(iso3):
+
+    """
+    Wikidata에서 해당 국가의 배우·가수·음악가 등의
+    대표적인 인물과 이미지를 가져온다.
+
+    ISO3 코드로 국가를 찾기 때문에
+    국가 이름을 직접 검색하는 것보다 오류가 적다.
+    """
+
+    iso3 = str(iso3).upper().strip()
+
+    # Wikidata SPARQL 쿼리
+    #
+    # P297 = ISO 3166-1 alpha-3
+    # P27  = 국적
+    # P18  = 대표 이미지
+    # P106 = 직업
+    #
+    # 배우 / 가수 / 음악가 / 모델 등을 대상으로 한다.
+    query = f"""
+    SELECT ?person ?personLabel ?image WHERE {{
+
+      ?country wdt:P297 "{iso3}".
+
+      ?person wdt:P27 ?country.
+      ?person wdt:P18 ?image.
+
+      {{
+        ?person wdt:P106 wd:Q33999.
+      }}
+      UNION
+      {{
+        ?person wdt:P106 wd:Q177220.
+      }}
+      UNION
+      {{
+        ?person wdt:P106 wd:Q639669.
+      }}
+      UNION
+      {{
+        ?person wdt:P106 wd:Q4610556.
+      }}
+
+      SERVICE wikibase:label {{
+        bd:serviceParam
+          wikibase:language "ko,en".
+      }}
+    }}
+
+    LIMIT 8
+    """
+
+    headers = {
+        "Accept": "application/sparql-results+json",
+        "User-Agent": (
+            "Streamlit-Aging-Map/1.0 "
+            "(educational project)"
+        )
+    }
+
+    try:
+
+        response = requests.get(
+            WIKIDATA_SPARQL_URL,
+            params={
+                "query": query,
+                "format": "json"
+            },
+            headers=headers,
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        results = data.get(
+            "results",
+            {}
+        ).get(
+            "bindings",
+            []
+        )
+
+        people = []
+
+        for item in results:
+
+            name = (
+                item
+                .get("personLabel", {})
+                .get("value")
+            )
+
+            image = (
+                item
+                .get("image", {})
+                .get("value")
+            )
+
+            if not name or not image:
+                continue
+
+            people.append(
+                {
+                    "name": name,
+                    "image": image
+                }
+            )
+
+        # 중복 제거
+        unique_people = []
+
+        seen = set()
+
+        for person in people:
+
+            if person["name"] in seen:
+                continue
+
+            seen.add(
+                person["name"]
+            )
+
+            unique_people.append(
+                person
+            )
+
+        return unique_people
+
+    except Exception:
+        return []
+
+
+# =========================================================
+# 11. 연예인 사진 표시
+# =========================================================
+
+def show_celebrities(
+    country_name,
+    iso3
+):
+
+    st.divider()
+
+    st.subheader(
+        f"🎬 {country_name}의 연예인"
+    )
+
+    st.caption(
+        "Wikidata에 대표 이미지가 등록된 배우·가수·음악가 등의 "
+        "인물을 표시합니다."
+    )
+
+    people = get_celebrities(
+        iso3
+    )
+
+    if not people:
+
+        st.info(
+            "이 국가에서 사용할 수 있는 연예인 이미지를 "
+            "찾지 못했습니다."
+        )
+
+        return
+
+    # 최대 8명
+    people = people[:8]
+
+    # 4명씩 두 줄에 표시
+    columns = st.columns(4)
+
+    for index, person in enumerate(people):
+
+        with columns[index % 4]:
+
+            st.image(
+                person["image"],
+                use_container_width=True
+            )
+
+            st.caption(
+                person["name"]
+            )
+
+
+# =========================================================
+# 12. 한국 지도
 # =========================================================
 
 def make_korea_map(
@@ -638,7 +750,6 @@ def make_korea_map(
         geojson
     )
 
-    # 반드시 시군구 코드로 연결
     map_data = geo_info.merge(
         sigungu,
         on="시군구코드",
@@ -655,7 +766,8 @@ def make_korea_map(
 
     colors = {
 
-        "19% 미만": "#FFF7BC",
+        "19% 미만":
+            "#FFF7BC",
 
         "19% 이상 ~ 23% 미만":
             "#FEC44F",
@@ -795,17 +907,15 @@ def make_korea_map(
 
 
 # =========================================================
-# 11. 데이터 불러오기
+# 13. 데이터 불러오기
 # =========================================================
 
 try:
 
-    # 세계 데이터
     world_df, world_year = (
         load_world_data()
     )
 
-    # 한국 데이터
     korea_population = (
         load_korea_population()
     )
@@ -832,39 +942,97 @@ except Exception as e:
 
 
 # =========================================================
-# 12. 전세계 지도
+# 14. 전세계 지도
 # =========================================================
 
 st.header(
-    f"1. 전세계 고령화 지도"
+    "1. 전세계 고령화 지도"
 )
 
 st.write(
-    "각 국가의 전체 인구 중 65세 이상 인구가 "
-    "차지하는 비율을 5단계로 나타냈다."
+    "국가를 클릭하면 해당 국가의 연예인 사진이 아래에 나타납니다."
 )
 
 world_fig = make_world_map(
     world_df
 )
 
-st.plotly_chart(
+
+# ---------------------------------------------------------
+# 중요:
+# on_select="rerun"을 사용하면
+# 사용자가 지도에서 국가를 클릭했을 때
+# Streamlit이 다시 실행되면서 클릭 정보를 받을 수 있다.
+# ---------------------------------------------------------
+
+world_event = st.plotly_chart(
     world_fig,
+
     use_container_width=True,
+
+    key="world_aging_map",
+
+    on_select="rerun",
+
+    selection_mode="points",
+
     config={
         "displaylogo": False,
         "scrollZoom": False
     }
 )
 
-st.caption(
-    f"세계 데이터에서 국가별로 이용 가능한 가장 최신 자료를 사용했습니다. "
-    f"전체 데이터에서 확인되는 최신 연도: {world_year}년"
-)
+
+# =========================================================
+# 15. 클릭한 국가 확인
+# =========================================================
+
+selected_iso3 = None
+selected_country = None
+
+try:
+
+    points = world_event.selection.points
+
+    if points:
+
+        # 가장 최근에 선택한 국가
+        point = points[0]
+
+        customdata = point.get(
+            "customdata"
+        )
+
+        if customdata:
+
+            selected_iso3 = customdata[0]
+            selected_country = customdata[1]
+
+except Exception:
+    pass
 
 
 # =========================================================
-# 13. 전세계 TOP / BOTTOM 10
+# 16. 선택한 국가의 연예인 표시
+# =========================================================
+
+if selected_iso3 and selected_country:
+
+    show_celebrities(
+        selected_country,
+        selected_iso3
+    )
+
+else:
+
+    st.info(
+        "👆 위 세계 지도에서 국가를 클릭해 보세요. "
+        "선택한 국가의 연예인 사진이 이곳에 표시됩니다."
+    )
+
+
+# =========================================================
+# 17. 세계 TOP / BOTTOM 10
 # =========================================================
 
 st.subheader(
@@ -956,16 +1124,16 @@ with col2:
 
 
 # =========================================================
-# 14. 대한민국 시군구 지도
+# 18. 대한민국 시군구 지도
 # =========================================================
 
 st.header(
-    f"2. 대한민국 시군구 고령화 지도"
+    "2. 대한민국 시군구 고령화 지도"
 )
 
 st.write(
     "한국은 읍·면·동 인구를 행정동 코드 앞 5자리 기준으로 "
-    "시군구에 합산하여 표시했다."
+    "시군구에 합산했습니다."
 )
 
 korea_fig = make_korea_map(
@@ -988,7 +1156,7 @@ st.caption(
 
 
 # =========================================================
-# 15. 한국 시군구 TOP / BOTTOM 10
+# 19. 한국 시군구 TOP / BOTTOM 10
 # =========================================================
 
 st.subheader(
@@ -1012,7 +1180,6 @@ korea_ranking = korea_ranking[
 ].copy()
 
 
-# 높은 지역 10개
 korea_top10 = (
     korea_ranking
     .sort_values(
@@ -1033,7 +1200,6 @@ korea_top10 = (
 korea_top10.index += 1
 
 
-# 낮은 지역 10개
 korea_bottom10 = (
     korea_ranking
     .sort_values(
@@ -1049,7 +1215,6 @@ korea_bottom10 = (
         ]
     ]
     .reset_index(drop=True)
-)
 
 korea_bottom10.index += 1
 
@@ -1099,7 +1264,7 @@ with col2:
 
 
 # =========================================================
-# 16. 데이터 출처
+# 20. 데이터 출처
 # =========================================================
 
 st.divider()
@@ -1109,12 +1274,17 @@ st.subheader(
 )
 
 st.caption(
-    "세계: World Bank, "
+    "세계 고령화 데이터: World Bank "
     "Population ages 65 and above (% of total population), "
     "UN World Population Prospects 기반"
 )
 
 st.caption(
-    "한국: greatsong/modudata "
-    "전국 읍·면·동 인구 및 시군구 경계 데이터"
+    "한국 인구 및 시군구 경계: "
+    "greatsong/modudata"
+)
+
+st.caption(
+    "연예인 인물 및 이미지: "
+    "Wikidata / Wikimedia Commons"
 )
